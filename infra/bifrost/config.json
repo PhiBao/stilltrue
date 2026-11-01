@@ -1,0 +1,147 @@
+{
+  "$schema": "https://www.getbifrost.ai/schema",
+  "client": {
+    "drop_excess_requests": false,
+    "enforce_auth_on_inference": true
+  },
+  "providers": {
+    "pollinations": {
+      "keys": [
+        {
+          "name": "pollinations-keyless",
+          "value": "not-required",
+          "models": [
+            "openai-fast"
+          ],
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "https://text.pollinations.ai",
+        "default_request_timeout_in_seconds": 60,
+        "max_retries": 0
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai",
+        "allowed_requests": {
+          "chat_completion": true,
+          "chat_completion_stream": true
+        },
+        "request_path_overrides": {
+          "chat_completion": "/openai",
+          "chat_completion_stream": "/openai"
+        }
+      }
+    },
+    "outage-lab": {
+      "keys": [
+        {
+          "name": "drill-key",
+          "value": "not-required",
+          "models": [
+            "chat"
+          ],
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "https://httpbin.org",
+        "default_request_timeout_in_seconds": 15,
+        "max_retries": 0
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai",
+        "allowed_requests": {
+          "chat_completion": true
+        },
+        "request_path_overrides": {
+          "chat_completion": "/status/503"
+        }
+      }
+    },
+    "ollama-local": {
+      "keys": [
+        {
+          "name": "local-ollama",
+          "value": "not-required",
+          "models": [
+            "qwen2.5:3b-instruct"
+          ],
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "http://stilltrue-ollama:11434/v1",
+        "default_request_timeout_in_seconds": 180,
+        "max_retries": 0,
+        "allow_private_network": true
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai",
+        "allowed_requests": {
+          "chat_completion": true
+        },
+        "request_path_overrides": {
+          "chat_completion": "/chat/completions"
+        }
+      }
+    }
+  },
+  "governance": {
+    "virtual_keys": [
+      {
+        "id": "vk-stilltrue",
+        "name": "StillTrue app",
+        "value": "sk-bf-stilltrue-dev",
+        "description": "Server-side key for the StillTrue verification pipeline",
+        "is_active": true,
+        "allow_all_providers": true,
+        "provider_configs": [
+          {
+            "provider": "pollinations",
+            "weight": 1.0,
+            "allowed_models": [
+              "openai-fast"
+            ],
+            "key_ids": [
+              "*"
+            ]
+          },
+          {
+            "provider": "ollama-local",
+            "weight": 1.0,
+            "allowed_models": [
+              "qwen2.5:3b-instruct"
+            ],
+            "key_ids": [
+              "*"
+            ]
+          },
+          {
+            "provider": "outage-lab",
+            "weight": 1.0,
+            "allowed_models": [
+              "chat"
+            ],
+            "key_ids": [
+              "*"
+            ]
+          }
+        ],
+        "budgets": [
+          {
+            "max_limit": 20.0,
+            "reset_duration": "1M"
+          }
+        ]
+      }
+    ]
+  },
+  "config_store": {
+    "enabled": true,
+    "type": "sqlite",
+    "config": {
+      "path": "./config.db"
+    }
+  }
+}

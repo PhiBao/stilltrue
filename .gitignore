@@ -1,0 +1,16 @@
+.env
+data/
+target/
+node_modules/
+.next/
+dist/
+*.log
+.DS_Store
+infra/bifrost/*.db
+infra/bifrost/*.db-shm
+infra/bifrost/*.db-wal
+
+web/.env.local
+
+__pycache__/
+*.tsbuildinfo

@@ -1,0 +1,20 @@
+{$DOMAIN} {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy stilltrue-api:8788 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy stilltrue-web:3000
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+}

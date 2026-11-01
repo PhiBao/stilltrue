@@ -1,0 +1,37 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: stilltrue-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+      - api
+    networks:
+      - stilltrue
+
+  bifrost:
+    ports: !reset []
+
+  api:
+    ports: !reset []
+    environment:
+      WEB_ORIGIN: ${WEB_ORIGIN}
+
+  web:
+    ports: !reset []
+    build:
+      args:
+        NEXT_PUBLIC_API_BASE: ""
+
+volumes:
+  caddy-data:
+  caddy-config:

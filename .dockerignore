@@ -1,0 +1,9 @@
+target
+data
+.env
+.git
+web/node_modules
+web/.next
+infra/bifrost/*.db
+infra/bifrost/*.db-shm
+infra/bifrost/*.db-wal
