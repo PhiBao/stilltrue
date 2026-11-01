@@ -5,6 +5,8 @@ services:
     image: maximhq/bifrost:latest
     container_name: stilltrue-bifrost
     restart: unless-stopped
+    environment:
+      TOKENFACTORY_API_KEY: ${TOKENFACTORY_API_KEY}
     ports:
       - "8081:8080"
     volumes:
@@ -34,8 +36,8 @@ services:
       DATABASE_URL: sqlite:///app/data/stilltrue.db?mode=rwc
       BIFROST_URL: http://stilltrue-bifrost:8080
       BIFROST_VK: sk-bf-stilltrue-dev
-      BIFROST_MODEL: pollinations/openai-fast
-      BIFROST_FALLBACK: ollama-local/qwen2.5:3b-instruct
+      BIFROST_MODEL: tokenfactory/Qwen/Qwen3-30B-A3B-Instruct-2507
+      BIFROST_FALLBACK: pollinations/openai-fast
       BIFROST_DRILL_MODEL: outage-lab/chat
       TAVILY_API_KEY: ${TAVILY_API_KEY}
       MAX_CLAIMS: 6

@@ -149,9 +149,10 @@ Rust API (Axum / Tokio / SQLx)
           │
           ▼
    Bifrost gateway (:8081)
-   ├── pollinations / openai-fast   (primary, free demo route)
-   ├── ollama-local / qwen2.5:3b    (optional local fallback)
-   └── outage-lab / chat            (deliberate 503, drill only)
+   ├── tokenfactory / Qwen3-30B      (primary, metered)
+   ├── pollinations / openai-fast    (free fallback route)
+   ├── ollama-local / qwen2.5:3b     (optional local fallback)
+   └── outage-lab / chat             (deliberate 503, drill only)
 ```
 
 | Layer | Choice | Why |
@@ -160,7 +161,7 @@ Rust API (Axum / Tokio / SQLx)
 | Backend | Rust, Axum, Tokio, SQLx, SQLite | Strong typing, explicit validation, deterministic scoring and repair, low operational overhead |
 | Gateway | Bifrost (Docker) | Provider routing, virtual-key budget, fallback, request-level headers |
 | Search | Tavily | Live sources with snippets and retrieval metadata |
-| Model | Any Bifrost-supported provider | The demo uses a free OpenAI-compatible route; swap `BIFROST_MODEL` for a frontier model without changing product code |
+| Model | Any Bifrost-supported provider | The demo uses TokenFactory (Nebius) Qwen3-30B as primary and Pollinations as a free fallback; swap `BIFROST_MODEL` without changing product code |
 
 The API persists each check as a single row with JSON columns for claims and proof. This keeps the shareable check self-contained and makes the receipt reproducible. The schema is in `crates/api/src/db.rs`.
 
@@ -179,7 +180,7 @@ The API persists each check as a single row with JSON columns for claims and pro
 | Corrected answer | **Deterministic patch** | Only changed quotes are replaced; see `build_correction` |
 | Freshness score | **Deterministic** | Weighted formula in `models.rs` |
 | Seeded demo answer | **Real text, written for the demo** | The verification itself is live; the answer is a fixed 2024 support macro |
-| Cloud-equivalent cost | **Estimate** | GPT-4o mini list rates; labeled as an estimate, not money spent |
+| Cloud-equivalent cost | **Estimate** | GPT-4o mini list rates; labeled as an estimate, not the TokenFactory bill |
 | Ollama fallback | **Optional** | Only if the local model is running; otherwise the claim becomes unverifiable |
 | Auth / teams / billing | **Not implemented** | Share links are unguessable UUIDs; see Security |
 
@@ -220,10 +221,10 @@ Live sources change. The exact verdicts can change with them. That is the produc
 On any completed check, click **Test provider failover** in the receipt. The app creates a new check with `drill=true`, which asks Bifrost for `outage-lab/chat` with a fallback to the live route. Expected receipt:
 
 ```text
-route      pollinations / openai-fast
+route      tokenfactory / Qwen/Qwen3-30B-A3B-Instruct-2507
 requested  chat
 failover   yes · hop 1
-reason     Gateway failed over from outage-lab to pollinations.
+reason     Gateway failed over from outage-lab/chat to tokenfactory/Qwen/Qwen3-30B-A3B-Instruct-2507.
 drill      forced primary outage
 ```
 
@@ -249,6 +250,7 @@ A single-VM deployment guide with Caddy, TLS, private Bifrost, and SSE-safe prox
 - Node 22+ and pnpm 11+
 - Docker
 - A Tavily API key ([tavily.com](https://tavily.com))
+- A Nebius Token Factory key ([tokenfactory.nebius.com](https://tokenfactory.nebius.com))
 
 ### Environment
 
@@ -260,10 +262,11 @@ Copy `.env.example` to `.env`:
 | `DATABASE_URL` | `sqlite://./data/stilltrue.db?mode=rwc` | SQLite path |
 | `BIFROST_URL` | `http://localhost:8081` | Gateway base URL |
 | `BIFROST_VK` | `sk-bf-stilltrue-dev` | Bifrost virtual key (dev value in `infra/bifrost/config.json`) |
-| `BIFROST_MODEL` | `pollinations/openai-fast` | Primary model route |
-| `BIFROST_FALLBACK` | `ollama-local/qwen2.5:3b-instruct` | Application-level takeover model |
+| `BIFROST_MODEL` | `tokenfactory/Qwen/Qwen3-30B-A3B-Instruct-2507` | Primary model route |
+| `BIFROST_FALLBACK` | `pollinations/openai-fast` | Application-level takeover model |
 | `BIFROST_DRILL_MODEL` | `outage-lab/chat` | Deliberate 503 route for the drill |
 | `TAVILY_API_KEY` | — | Required for live verification |
+| `TOKENFACTORY_API_KEY` | — | Nebius Token Factory key, passed to the Bifrost container only |
 | `MAX_CLAIMS` | `6` | Claim cap per check |
 | `TAVILY_MAX_RESULTS` | `4` | Sources per claim |
 | `EXTRACTION_MODE` | `heuristic` | `heuristic` (default) or `llm` |
@@ -273,6 +276,7 @@ Copy `.env.example` to `.env`:
 
 ```bash
 export TAVILY_API_KEY=tvly-...
+export TOKENFACTORY_API_KEY=tf-...
 docker compose up --build
 # web:    http://localhost:3100
 # api:    http://localhost:8788
@@ -290,11 +294,14 @@ docker exec stilltrue-ollama ollama pull qwen2.5:3b-instruct
 
 `infra/bifrost/config.json` declares:
 
-- a `pollinations` custom OpenAI-compatible provider (free demo route)
+- a `tokenfactory` custom OpenAI-compatible provider (primary, Nebius Token Factory)
+- a `pollinations` custom OpenAI-compatible provider (free fallback route)
 - an `ollama-local` custom OpenAI-compatible provider (optional fallback)
 - an `outage-lab` provider pointed at a 503 endpoint (drill only)
 - a virtual key with a **$20/month** budget and an explicit model allow-list
 - SQLite config storage
+
+The TokenFactory key is referenced as `env.TOKENFACTORY_API_KEY`; Docker Compose passes it from `.env`. If you run Bifrost with `docker run`, add `-e TOKENFACTORY_API_KEY=...`. The key is never written into the repository.
 
 The virtual key value is a local development key. Rotate it before exposing the gateway. Bifrost's dashboard is available at `http://localhost:8081`; it is not password-protected by default. Do not expose it publicly without setting `BIFROST_SETUP_TOKEN` and an admin password.
 
@@ -353,7 +360,7 @@ What is not covered by automated tests:
 
 - **Six claims is a product decision.** It keeps a check under a minute and Tavily credit use predictable. A long document is reduced to the most decision-relevant claims, not exhaustively audited.
 - **Deterministic extraction can miss a claim.** It is conservative by design and the UI shows exactly what was selected. An optional `EXTRACTION_MODE=llm` path exists, but the default avoids a second rate-limited model call and keeps the selection auditable.
-- **The demo model route is free and rate-limited.** Pollinations allows one new reply every 45 seconds per IP. The app retries and can take over with a local Ollama model. A production deployment should use a paid provider behind the same Bifrost virtual key.
+- **The primary demo route is metered.** TokenFactory (Nebius) is the primary route; the free Pollinations fallback allows one new reply every 45 seconds per IP. The app retries and can take over with a local Ollama model. TokenFactory billing is separate from the receipt's cloud-equivalent estimate.
 - **Evidence can be wrong.** A source can be stale, SEO-spam, or malicious. StillTrue surfaces the source, the quote, and the retrieval time; it does not declare the source infallible.
 - **No watch mode yet.** Re-checking is manual (`Re-check` on a completed check). Scheduled re-verification is the obvious retention loop and the next build.
 - **English-centric heuristics.** The segmenter’s instruction and volatility markers are English. Other languages need their own marker sets.

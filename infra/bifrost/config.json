@@ -85,6 +85,32 @@
           "chat_completion": "/chat/completions"
         }
       }
+    },
+    "tokenfactory": {
+      "keys": [
+        {
+          "name": "tokenfactory-primary",
+          "value": "env.TOKENFACTORY_API_KEY",
+          "models": [
+            "Qwen/Qwen3-30B-A3B-Instruct-2507"
+          ],
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "https://api.tokenfactory.nebius.com/v1",
+        "default_request_timeout_in_seconds": 90,
+        "max_retries": 1
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai",
+        "allowed_requests": {
+          "chat_completion": true
+        },
+        "request_path_overrides": {
+          "chat_completion": "/chat/completions"
+        }
+      }
     }
   },
   "governance": {
@@ -97,6 +123,16 @@
         "is_active": true,
         "allow_all_providers": true,
         "provider_configs": [
+          {
+            "provider": "tokenfactory",
+            "weight": 1.0,
+            "allowed_models": [
+              "Qwen/Qwen3-30B-A3B-Instruct-2507"
+            ],
+            "key_ids": [
+              "*"
+            ]
+          },
           {
             "provider": "pollinations",
             "weight": 1.0,

@@ -26,6 +26,7 @@ Set at least:
 
 ```dotenv
 TAVILY_API_KEY=tvly-...
+TOKENFACTORY_API_KEY=tf-...
 DOMAIN=stilltrue.example.com
 WEB_ORIGIN=https://stilltrue.example.com
 ```
@@ -64,7 +65,7 @@ Then run the seeded demo in a browser and the failover drill from the receipt. T
 ```text
 requested  chat
 failover   yes · hop 1
-reason     Gateway failed over from outage-lab to pollinations.
+reason     Gateway failed over from outage-lab/chat to tokenfactory/Qwen/Qwen3-30B-A3B-Instruct-2507.
 drill      forced primary outage
 ```
 
@@ -105,7 +106,7 @@ location /api/ {
 
 ## Production checklist
 
-- [ ] `TAVILY_API_KEY` set, never committed
+- [ ] `TAVILY_API_KEY` and `TOKENFACTORY_API_KEY` set, never committed
 - [ ] Bifrost private, admin password set, dev virtual key rotated
 - [ ] `WEB_ORIGIN` matches the public web origin
 - [ ] `NEXT_PUBLIC_API_BASE` empty for same-origin deployment

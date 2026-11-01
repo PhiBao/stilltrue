@@ -116,8 +116,8 @@ export function ProofReceipt({
         </div>
         <p className="receipt-note">
           Route, failover and usage are read from Bifrost response headers and
-          usage counters. Cloud-equivalent is an estimate at GPT-4o mini list
-          rates, not money spent.
+          usage counters. Cloud-equivalent is a benchmark at GPT-4o mini list
+          rates, not the TokenFactory bill.
         </p>
         <div className="receipt-actions">
           <button className="btn btn--small" onClick={copy} type="button">

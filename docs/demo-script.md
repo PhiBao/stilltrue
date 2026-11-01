@@ -10,7 +10,7 @@ Target length: **2:40–3:00**. Record at 1440×900, browser zoom 100%, bookmark
 4. Have the failover check ready in a third tab (run it once before recording).
 5. Close other tabs, notifications, and terminals with secrets.
 
-If the free model route is rate-limited during recording, use the pre-run check and say: “The check is live; this is the completed evidence room from a run a moment ago.” Do not fake a result.
+If the primary model route is unavailable during recording, use the pre-run check and say: “The check is live; this is the completed evidence room from a run a moment ago.” Do not fake a result.
 
 ## Scene 1 — The hook (0:00–0:20)
 
@@ -71,7 +71,7 @@ If the free model route is rate-limited during recording, use the pre-run check 
 ```text
 requested  chat
 failover   yes · hop 1
-reason     Gateway failed over from outage-lab to pollinations.
+reason     Gateway failed over from outage-lab/chat to tokenfactory/Qwen/Qwen3-30B-A3B-Instruct-2507.
 drill      forced primary outage
 ```
 
@@ -96,7 +96,7 @@ Show `http://localhost:3100/method` and the architecture diagram:
 ## Fallback lines
 
 - If Tavily is slow: “The check is waiting on live sources; this is the honest failure mode. If a source is missing, the claim becomes unverifiable, not green.”
-- If the model route is rate-limited: “The free demo route allows one new reply every 45 seconds. The gateway retries, and the product can take over with a local model. A production deployment uses a paid provider behind the same key.”
+- If the primary model route is unavailable: “The gateway failed over, or the claim became unverifiable. The free Pollinations fallback allows one new reply every 45 seconds; a production deployment keeps a paid provider behind the same key.”
 - If a verdict looks wrong: “The evidence is on screen. The product’s job is to make the claim auditable, not to be infallible.”
 
 ## Do not

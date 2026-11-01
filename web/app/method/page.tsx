@@ -130,10 +130,10 @@ export default function MethodPage() {
         <p className="method-prose">
           A check accepts up to 12,000 characters and verifies at most six
           claims, four sources each. These caps keep a check under a minute and
-          keep Tavily credit use predictable. The demo deployment uses a
-          free model route; the architecture is provider-agnostic and a
-          production deployment can point the same Bifrost virtual key at a
-          frontier model. The scoring weights are explicit: supported and
+          keep Tavily credit use predictable. The demo deployment uses
+          TokenFactory (Nebius) with a metered key; Pollinations remains a free
+          fallback. The architecture is provider-agnostic and a production
+          deployment can point the same Bifrost virtual key at a frontier model. The scoring weights are explicit: supported and
           stable count 1.0, unverifiable 0.5, changed 0.0, weighted by claim
           importance. The score is a summary of cited verdicts, not a
           probability.

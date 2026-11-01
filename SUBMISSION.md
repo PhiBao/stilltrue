@@ -60,7 +60,7 @@ StillTrue treats freshness as a property of **claims**, not answers.
 | Source URLs, snippets, retrieval dates | Real |
 | Bifrost routing and virtual-key budget | Real |
 | Bifrost failover | Real (forced 503 drill, gateway headers) |
-| LLM adjudication | Real (one call per check in the default mode) |
+| LLM adjudication | Real (one call per check in the default mode, TokenFactory Qwen3-30B) |
 | Claim segmentation | Deterministic Rust |
 | Corrected answer | Deterministic patch |
 | Freshness score | Deterministic formula |
@@ -106,7 +106,7 @@ StillTrue treats freshness as a property of **claims**, not answers.
 
 - Six-claim cap; long documents are reduced to the most decision-relevant claims.
 - Deterministic extraction can miss a claim; the UI shows exactly what was selected.
-- The free demo model route is rate-limited; production should use a paid provider behind the same Bifrost key.
+- The primary demo route is TokenFactory (Nebius) with a metered key; the free Pollinations fallback is rate-limited. Production should keep a paid provider behind the same Bifrost key.
 - Evidence can be wrong or malicious; the product surfaces sources, not certainty.
 - No scheduled watch mode, auth, or team isolation in this build.
 
