@@ -10,7 +10,7 @@ pub struct AppState {
     pub cfg: Config,
     pub db: SqlitePool,
     pub http: reqwest::Client,
-    pub events: Mutex<HashMap<String, broadcast::Sender<CheckEvent>>>,
+    pub events: Arc<Mutex<HashMap<String, broadcast::Sender<CheckEvent>>>>,
     /// Very small in-memory abuse guard: timestamps of recent checks per client key.
     pub rate: Mutex<HashMap<String, Vec<Instant>>>,
 }
@@ -25,7 +25,7 @@ impl AppState {
             cfg,
             db,
             http,
-            events: Mutex::new(HashMap::new()),
+            events: Arc::new(Mutex::new(HashMap::new())),
             rate: Mutex::new(HashMap::new()),
         })
     }
@@ -41,6 +41,16 @@ impl AppState {
         }
     }
 
+    pub async fn finish_check(&self, id: &str) {
+        // Keep the channel briefly so a late SSE client can still replay, then drop it.
+        let id_owned = id.to_string();
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+            events.lock().await.remove(&id_owned);
+        });
+    }
+
     pub async fn subscribe(&self, id: &str) -> Option<broadcast::Receiver<CheckEvent>> {
         self.events.lock().await.get(id).map(|tx| tx.subscribe())
     }
@@ -51,7 +61,7 @@ impl AppState {
         let now = Instant::now();
         let entry = map.entry(key.to_string()).or_default();
         entry.retain(|t| now.duration_since(*t) < std::time::Duration::from_secs(3600));
-        if entry.len() >= 40 {
+        if entry.len() >= self.cfg.rate_limit_per_hour {
             return false;
         }
         entry.push(now);

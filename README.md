@@ -93,11 +93,11 @@ The score is the importance-weighted average of cited verdicts:
 | Verdict | Value |
 | --- | --- |
 | supported | 1.0 |
-| stable | 1.0 |
-| unverifiable | 0.5 |
 | changed | 0.0 |
+| unverifiable | 0.0 (not verified) |
+| stable | excluded — never researched, never credited |
 
-Weights are the claim importance (1–3). The score is a summary of evidence, not a probability. A score of 44 means three of the six selected claims are contradicted by current sources, not that the answer has a 44% chance of being true.
+Weights are the claim importance (1–3). Coverage (adjudicated / extracted) is shown separately. The score is a summary of cited evidence, not a probability. A check with nothing verified has **no score** — it never reads 50 by default. A low-confidence verdict (below 0.6) is downgraded to unverifiable, and a changed correction is accepted only if every number in it appears in a cited source; a restatement of the original becomes supported instead.
 
 ---
 
@@ -124,7 +124,7 @@ The receipt reads those headers directly:
 - `x-bifrost-routing-info-primary-provider`
 - `x-bifrost-request-id`
 
-The **failover drill** is a real gateway event, not a UI animation. The `outage-lab` provider points at a deliberate `503` endpoint. A drill request asks Bifrost for `outage-lab/chat` with a fallback to the live model route. Bifrost tries the primary, receives the 503, fails over, and stamps the response with `Is-Fallback: true`, `Fallback-Index: 1`, and `Primary-Provider: outage-lab`. The receipt shows all of it.
+The **failover drill** is a real gateway event, not a UI animation. The `outage-lab` provider points at a local 503 sidecar (`infra/drill-server`). A drill request asks Bifrost for `outage-lab/chat` with a fallback to the live model route. Bifrost tries the primary, receives the 503, fails over, and stamps the response with `Is-Fallback: true`, `Fallback-Index: 1`, and `Primary-Provider: outage-lab`. The receipt shows all of it. Normal checks also carry a gateway `fallbacks` array to the Pollinations route; the app additionally takes over explicitly if the gateway rejects the primary route.
 
 Without Bifrost, the product has no governed model route, no budget boundary, no failover evidence, and no receipt. It would be a search box with an opinion.
 
@@ -149,10 +149,9 @@ Rust API (Axum / Tokio / SQLx)
           │
           ▼
    Bifrost gateway (:8081)
-   ├── tokenfactory / Qwen3-30B      (primary, metered)
-   ├── pollinations / openai-fast    (free fallback route)
-   ├── ollama-local / qwen2.5:3b     (optional local fallback)
-   └── outage-lab / chat             (deliberate 503, drill only)
+   ├── tokenfactory / Qwen3-30B   (primary, metered; gateway-native fallback)
+   ├── pollinations / openai-fast (free fallback route)
+   └── outage-lab / chat          (deliberate 503 via local drill sidecar)
 ```
 
 | Layer | Choice | Why |
@@ -209,10 +208,12 @@ Click **Load the 2024 support macro**, then **Check freshness**. Or click **Run 
 
 A healthy run against the seeded answer produces:
 
-- freshness **44 / 100**
-- **3 changed**, **2 supported**, **1 stable**
-- a repaired answer that changes the GPT-4o price, the Assistants API recommendation, and the GPT-4 Turbo price
+- freshness **40 / 100 · Verified 5/6**
+- **2 changed**, **2 supported**, **1 unverifiable**, **1 stable**
+- a repaired answer that changes the GPT-4o price and the Assistants API recommendation
 - a receipt with **5 Tavily searches**, **5 credits**, **1 adjudication call**, and a provider/model route
+
+Evidence can disagree between runs. Last live run (TokenFactory): GPT-4o $2.50/$10.00 changed, Assistants API deprecated changed, Batch API unverifiable (snippets returned Gemini, not OpenAI), GPT-4 Turbo $10/$30 supported. The product reports what the sources actually said.
 
 Live sources change. The exact verdicts can change with them. That is the product working.
 
@@ -239,6 +240,10 @@ The recording script is in [`docs/demo-script.md`](docs/demo-script.md). It cove
 <!-- TODO: add the deployed URL before submission. -->
 
 A single-VM deployment guide with Caddy, TLS, private Bifrost, and SSE-safe proxying is in [`docs/deploy.md`](docs/deploy.md).
+
+### Paste a URL
+
+Paste one `https://` docs/help-center URL instead of text. StillTrue extracts the page with Tavily Extract and audits the extracted answer. If extraction fails, the server asks for pasted text instead of guessing.
 
 ---
 
@@ -296,6 +301,7 @@ docker exec stilltrue-ollama ollama pull qwen2.5:3b-instruct
 
 - a `tokenfactory` custom OpenAI-compatible provider (primary, Nebius Token Factory)
 - a `pollinations` custom OpenAI-compatible provider (free fallback route)
+- an `outage-lab` provider pointed at a local 503 sidecar (drill only, no httpbin dependency)
 - an `ollama-local` custom OpenAI-compatible provider (optional fallback)
 - an `outage-lab` provider pointed at a 503 endpoint (drill only)
 - a virtual key with a **$20/month** budget and an explicit model allow-list
@@ -324,6 +330,12 @@ cd web && pnpm build
 
 # Live smoke test against a running API
 python3 scripts/demo.py
+
+# Labeled eval strip (5 fixtures, live)
+python3 scripts/eval.py
+
+# Preflight gate — run immediately before judging
+python3 scripts/preflight.py
 ```
 
 What is covered by tests:

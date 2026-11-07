@@ -50,10 +50,17 @@ export function verdictLabel(v: Verdict | string): string {
 }
 
 export function scoreLine(score: number | null, changed: number): string {
-  if (score === null) return "Awaiting evidence";
-  if (changed === 0) return "Every checked claim still holds";
+  if (score === null) return "No claim could be verified yet";
+  if (changed === 0) return "Every verified claim still holds";
   if (changed === 1) return "One claim is no longer true";
   return `${changed} claims are no longer true`;
+}
+
+export function coverageLine(coverage: number | null | undefined, adjudicated: number | undefined, total: number): string {
+  if (coverage == null) return "";
+  const adj = adjudicated ?? 0;
+  if (adj === 0) return "Nothing verified yet — the score is blank by design.";
+  return `Verified ${adj}/${total} · stable claims excluded`;
 }
 
 export function scoreTone(score: number | null): "good" | "mixed" | "bad" | "idle" {

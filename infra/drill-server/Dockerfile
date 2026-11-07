@@ -1,0 +1,4 @@
+FROM python@sha256:a0f2e268f2ce8f3709611a90054ec6a8ae31f6251f5896b8648b9bb99835e30a
+COPY 503.py /503.py
+EXPOSE 8000
+CMD ["python", "/503.py"]

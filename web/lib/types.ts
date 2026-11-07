@@ -40,6 +40,7 @@ export interface Claim {
   start: number;
   end: number;
   evidence: Evidence[];
+  cited_evidence_ids?: string[];
 }
 
 export interface Proof {
@@ -80,6 +81,10 @@ export interface Check {
   error: string | null;
   claims: Claim[];
   proof: Proof;
+  adjudicated_count?: number;
+  coverage?: number | null;
+  recheck_of?: string | null;
+  source_url?: string | null;
 }
 
 export interface CheckSummary {
@@ -91,6 +96,7 @@ export interface CheckSummary {
   claim_count: number;
   changed_count: number;
   created_at: string;
+  recheck_of?: string | null;
 }
 
 export type CheckEvent =

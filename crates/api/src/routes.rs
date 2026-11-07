@@ -33,6 +33,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/ready", get(ready))
+        .route("/api/health", get(health))
         .route("/api/demo", get(demo))
         .route("/api/checks", post(create_check).get(list_checks))
         .route("/api/checks/{id}", get(get_check))
@@ -48,6 +50,35 @@ async fn health() -> impl IntoResponse {
     Json(json!({"ok": true, "service": "stilltrue-api"}))
 }
 
+async fn ready(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, AppError> {
+    let db_ok = sqlx::query_scalar::<_, i64>("SELECT 1")
+        .fetch_one(&state.db)
+        .await
+        .is_ok();
+    let bifrost_ok = if state.cfg.bifrost_url.is_empty() {
+        false
+    } else {
+        state
+            .http
+            .get(format!("{}/health", state.cfg.bifrost_url))
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+    };
+    let tavily_configured = !state.cfg.tavily_api_key.is_empty();
+    let ok = db_ok && bifrost_ok && tavily_configured;
+    Ok(Json(json!({
+        "ok": db_ok && bifrost_ok,
+        "ready": ok,
+        "db_ok": db_ok,
+        "bifrost_ok": bifrost_ok,
+        "tavily_configured": tavily_configured,
+        "model": state.cfg.bifrost_model,
+    })))
+}
+
 async fn demo() -> impl IntoResponse {
     Json(pipeline::demo_answer())
 }
@@ -57,16 +88,38 @@ async fn create_check(
     headers: HeaderMap,
     Json(req): Json<CreateCheckRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let text = req.text.trim().to_string();
+    let (text, source_url) = if let Some(url) = req.url.clone().filter(|u| !u.trim().is_empty()) {
+        let url = url.trim().to_string();
+        let parsed = url::Url::parse(&url)
+            .map_err(|_| AppError::bad_request("That URL is not valid. Paste an https:// link or paste answer text instead."))?;
+        if parsed.scheme() != "https" && parsed.scheme() != "http" {
+            return Err(AppError::bad_request("Only http(s) page URLs are supported."));
+        }
+        match crate::clients::tavily_extract(&state.http, &state.cfg, &url).await {
+            Ok(content) => (content, Some(url)),
+            Err(e) => {
+                tracing::warn!(error = %e, "tavily extract failed");
+                return Err(AppError::bad_request("Could not extract that page. It may be blocked or requires login. Paste the answer text instead."));
+            }
+        }
+    } else {
+        (req.text.trim().to_string(), None)
+    };
     if text.chars().count() < 40 {
         return Err(AppError::bad_request(
-            "Paste at least 40 characters so there is something to check.",
+            "Paste at least 40 characters, or paste one https:// page URL.",
         ));
     }
     if text.chars().count() > 12_000 {
         return Err(AppError::bad_request(
             "Answers are limited to 12,000 characters.",
         ));
+    }
+    let recheck_of = req.recheck_of.clone().filter(|v| !v.trim().is_empty());
+    if let Some(parent_id) = recheck_of.as_ref() {
+        if db::get_check(&state.db, parent_id).await?.is_none() {
+            return Err(AppError::bad_request("The check to re-run was not found."));
+        }
     }
 
     let client_key = headers
@@ -106,6 +159,10 @@ async fn create_check(
         completed_at: None,
         error: None,
         claims: vec![],
+        adjudicated_count: 0,
+        coverage: None,
+        recheck_of,
+        source_url,
         proof: Proof {
             drill: req.drill,
             ..Default::default()

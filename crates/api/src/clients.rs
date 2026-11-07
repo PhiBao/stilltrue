@@ -59,17 +59,25 @@ pub async fn chat_json_model(
         return Err(anyhow!("BIFROST_URL is not configured"));
     }
 
-    let (model, fallbacks) = if drill {
+    let (model, fallbacks) = if let Some(override_model) = model_override {
+        // Explicit takeover (e.g. app-level fallback): use the override model
+        // as the primary route. Needed so drill-mode takeovers do not retry
+        // the outage endpoint.
+        let fallbacks = cfg
+            .bifrost_fallback
+            .as_ref()
+            .filter(|f| f.as_str() != override_model)
+            .map(|f| vec![f.clone()]);
+        (override_model.to_string(), fallbacks)
+    } else if drill {
         (
             cfg.drill_model.clone(),
             Some(vec![cfg.bifrost_model.clone()]),
         )
     } else {
         (
-            model_override
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| cfg.bifrost_model.clone()),
-            None,
+            cfg.bifrost_model.clone(),
+            cfg.bifrost_fallback.as_ref().map(|fb| vec![fb.clone()]),
         )
     };
 
@@ -90,7 +98,6 @@ pub async fn chat_json_model(
     let resp = http
         .post(format!("{}/v1/chat/completions", cfg.bifrost_url))
         .header("x-bf-vk", &cfg.bifrost_vk)
-        .header("x-bf-cache-key", "stilltrue-pipeline-v1")
         .json(&body)
         .timeout(Duration::from_secs(180))
         .send()
@@ -240,24 +247,45 @@ pub async fn tavily_search(
         "include_raw_content": false,
         "topic": "general"
     });
-    let resp = http
-        .post("https://api.tavily.com/search")
-        .bearer_auth(&cfg.tavily_api_key)
-        .json(&body)
-        .timeout(Duration::from_secs(35))
-        .send()
-        .await
-        .context("call Tavily search")?;
-    let status = resp.status();
-    let text = resp.text().await.context("read Tavily body")?;
-    if !status.is_success() {
-        return Err(anyhow!(
-            "Tavily returned {}: {}",
-            status.as_u16(),
-            truncate(&text, 240)
-        ));
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 0..2 {
+        let resp = http
+            .post("https://api.tavily.com/search")
+            .bearer_auth(&cfg.tavily_api_key)
+            .json(&body)
+            .timeout(Duration::from_secs(35))
+            .send()
+            .await;
+        match resp {
+            Ok(r) => {
+                let status = r.status();
+                let text = r.text().await.context("read Tavily body")?;
+                if status.is_success() {
+                    return parse_tavily_search(&text, claim_id);
+                }
+                if (status == 429 || status.is_server_error()) && attempt == 0 {
+                    last_err = Some(anyhow!("Tavily returned {}", status.as_u16()));
+                    tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+                    continue;
+                }
+                return Err(anyhow!(
+                    "Tavily returned {}: {}",
+                    status.as_u16(),
+                    truncate(&text, 240)
+                ));
+            }
+            Err(e) if attempt == 0 => {
+                last_err = Some(anyhow!("call Tavily search: {}", e));
+                tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+            }
+            Err(e) => return Err(anyhow!("call Tavily search: {}", e)),
+        }
     }
-    let parsed: Value = serde_json::from_str(&text).context("parse Tavily envelope")?;
+    Err(last_err.unwrap_or_else(|| anyhow!("Tavily search failed")))
+}
+
+fn parse_tavily_search(text: &str, claim_id: &str) -> anyhow::Result<(Vec<Evidence>, TavilyMeta)> {
+    let parsed: Value = serde_json::from_str(text).context("parse Tavily envelope")?;
     let retrieved_at = Utc::now().to_rfc3339();
     let mut out = Vec::new();
     if let Some(results) = parsed.get("results").and_then(|v| v.as_array()) {
@@ -295,4 +323,54 @@ pub async fn tavily_search(
             credits: 1,
         },
     ))
+}
+
+/// Extract readable page text for URL check mode (paste one https:// link).
+pub async fn tavily_extract(
+    http: &reqwest::Client,
+    cfg: &Config,
+    url: &str,
+) -> anyhow::Result<String> {
+    if cfg.tavily_api_key.is_empty() {
+        return Err(anyhow!("TAVILY_API_KEY is not configured"));
+    }
+    let body = json!({
+        "urls": [url],
+        "extract_depth": "basic",
+        "format": "markdown"
+    });
+    let resp = http
+        .post("https://api.tavily.com/extract")
+        .bearer_auth(&cfg.tavily_api_key)
+        .json(&body)
+        .timeout(Duration::from_secs(40))
+        .send()
+        .await
+        .context("call Tavily extract")?;
+    let status = resp.status();
+    let text = resp.text().await.context("read Tavily extract body")?;
+    if !status.is_success() {
+        return Err(anyhow!(
+            "Tavily extract returned {}: {}",
+            status.as_u16(),
+            truncate(&text, 240)
+        ));
+    }
+    let parsed: Value =
+        serde_json::from_str(&text).context("parse Tavily extract envelope")?;
+    let raw = parsed
+        .get("results")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|r| {
+            r.get("raw_content")
+                .and_then(|v| v.as_str())
+                .or_else(|| r.get("content").and_then(|v| v.as_str()))
+        })
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if raw.chars().count() < 40 {
+        return Err(anyhow!("The page did not yield enough readable text to check."));
+    }
+    Ok(raw.chars().take(12_000).collect())
 }

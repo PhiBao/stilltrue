@@ -45,9 +45,10 @@
         }
       ],
       "network_config": {
-        "base_url": "https://httpbin.org",
+        "base_url": "http://stilltrue-drill:8000",
         "default_request_timeout_in_seconds": 15,
-        "max_retries": 0
+        "max_retries": 0,
+        "allow_private_network": true
       },
       "custom_provider_config": {
         "base_provider_type": "openai",
@@ -55,7 +56,7 @@
           "chat_completion": true
         },
         "request_path_overrides": {
-          "chat_completion": "/status/503"
+          "chat_completion": "/503"
         }
       }
     },
@@ -121,7 +122,7 @@
         "value": "sk-bf-stilltrue-dev",
         "description": "Server-side key for the StillTrue verification pipeline",
         "is_active": true,
-        "allow_all_providers": true,
+        "allow_all_providers": false,
         "provider_configs": [
           {
             "provider": "tokenfactory",
@@ -169,7 +170,13 @@
             "max_limit": 20.0,
             "reset_duration": "1M"
           }
-        ]
+        ],
+        "rate_limit": {
+          "request_max_limit": 600,
+          "request_reset_duration": "1m",
+          "token_max_limit": 200000,
+          "token_reset_duration": "1h"
+        }
       }
     ]
   },

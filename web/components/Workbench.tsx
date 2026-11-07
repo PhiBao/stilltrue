@@ -12,13 +12,16 @@ export function Workbench() {
   const [error, setError] = useState<string | null>(null);
 
   const count = useMemo(() => text.trim().length, [text]);
-  const canSubmit = count >= 40 && count <= 12000 && !busy && !demoBusy;
+  const isUrl = /^https?:\/\/.+/.test(text.trim()) && !text.trim().includes("\n");
+  const canSubmit = !busy && !demoBusy && (isUrl || (count >= 40 && count <= 12000));
 
   async function submit(value: string, source: string) {
     setError(null);
     setBusy(true);
     try {
-      const { id } = await createCheck(value, source);
+      const { id } = await createCheck(value, source, false, {
+        url: isUrl ? value.trim() : undefined,
+      });
       router.push(`/check/${id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start the check.");
@@ -54,7 +57,7 @@ export function Workbench() {
           id="answer"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Paste a support macro, a docs answer, a sales brief — anything an AI wrote that a person might act on."
+          placeholder="Paste a support macro, docs text — or one https:// page URL to check the live page."
           spellCheck={false}
         />
         <div className="composer-actions">
@@ -75,7 +78,7 @@ export function Workbench() {
           </button>
         </div>
         <div className="composer-foot">
-          <span>Live Tavily sources · evidence attached</span>
+          <span>{isUrl ? "Page URL — will be extracted live" : "Live Tavily sources · evidence attached"}</span>
           <span>No sign-up</span>
         </div>
         {error && <p className="error-note">{error}</p>}
@@ -89,8 +92,8 @@ export function Workbench() {
             <p className="specimen-sub">Written in 2024. Still in the help center.</p>
           </div>
           <div className="specimen-score">
-            <b>44</b>
-            <span>freshness</span>
+            <b>40</b>
+            <span>freshness · illustrative</span>
           </div>
         </div>
         <div className="specimen-body">
@@ -105,9 +108,9 @@ export function Workbench() {
             GPT-4 Turbo costs $10 / $30 per million tokens.
           </p>
         </div>
-        <div className="specimen-stamp">3 claims expired</div>
+        <div className="specimen-stamp">2 claims expired</div>
         <div className="specimen-cta">
-          <p>Checked against 5 live sources</p>
+          <p>Preview — live run re-checks in seconds</p>
           <button
             className="btn btn--small"
             onClick={runDemo}

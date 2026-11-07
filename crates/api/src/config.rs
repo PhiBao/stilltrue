@@ -14,6 +14,7 @@ pub struct Config {
     pub tavily_max_results: usize,
     pub extraction_mode: String,
     pub web_origin: String,
+    pub rate_limit_per_hour: usize,
 }
 
 impl Config {
@@ -51,7 +52,12 @@ impl Config {
                 .unwrap_or(4)
                 .clamp(1, 8),
             extraction_mode: env::var("EXTRACTION_MODE")
-                .unwrap_or_else(|_| "heuristic".to_string()),
+                .unwrap_or_else(|_| "hybrid".to_string()),
+            rate_limit_per_hour: env::var("RATE_LIMIT_PER_HOUR")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(200)
+                .clamp(10, 5000),
             web_origin: env::var("WEB_ORIGIN")
                 .unwrap_or_else(|_| "http://localhost:3000".to_string()),
         };

@@ -7,14 +7,51 @@ static MULTI_SPACE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
 /// Split prose into sentence spans while preserving byte offsets into the original.
 /// Deliberately conservative: a boundary needs terminal punctuation followed by
 /// whitespace and an uppercase letter, a quote, or end-of-text.
+fn is_abbrev_word(text: &str, dot: usize) -> bool {
+    // Last 1-4 chars before the dot are letters (Mr. Dr. U.S. No. vs. etc.)
+    let start = dot.saturating_sub(4);
+    let frag = &text[start..dot];
+    let letters: String = frag.chars().filter(|c| c.is_ascii_alphabetic()).collect();
+    matches!(
+        letters.to_lowercase().as_str(),
+        "mr" | "mrs" | "dr" | "us" | "uk" | "no" | "st" | "sr" | "jr" | "vs" | "etc" | "fig" | "dept" | "est"
+    )
+}
+
+fn is_decimal_dot(text: &str, dot: usize) -> bool {
+    let bytes = text.as_bytes();
+    dot > 0 && dot + 1 < bytes.len() && bytes[dot - 1].is_ascii_digit() && bytes[dot + 1].is_ascii_digit()
+}
+
+fn is_list_or_table_line(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("- ") || t.starts_with("* ") || t.starts_with("• ") || t.starts_with("| ")
+        || (t.len() > 2 && t.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && (t[1..].starts_with(". ") || t[1..].starts_with(") ")))
+}
+
 pub fn sentence_spans(text: &str) -> Vec<(usize, usize)> {
     let bytes = text.as_bytes();
     let mut spans = Vec::new();
     let mut start = 0usize;
     let mut i = 0usize;
     while i < bytes.len() {
-        let b = bytes[i];
-        if b == b'\n' {
+        // Markdown bullets and table rows are atomic spans (one claim per row).
+        if i == start {
+            let line_end = text[i..].find('\n').map(|p| i + p).unwrap_or(text.len());
+            let line = &text[i..line_end];
+            if is_list_or_table_line(line) && line.trim().len() > 14 {
+                spans.push((start, start + line.trim_end().len()));
+                start += line.trim_end().len();
+                let mut j = start;
+                while j < bytes.len() && (bytes[j] == b'\n' || bytes[j] == b'\r' || bytes[j] == b' ') {
+                    j += 1;
+                }
+                start = j;
+                i = j;
+                continue;
+            }
+        }
+        if bytes[i] == b'\n' {
             let line = &text[start..i];
             let is_paragraph = i + 1 < bytes.len() && bytes[i + 1] == b'\n';
             if is_paragraph || line.trim_end().ends_with(':') {
@@ -35,7 +72,11 @@ pub fn sentence_spans(text: &str) -> Vec<(usize, usize)> {
                 continue;
             }
         }
-        if b == b'.' || b == b'!' || b == b'?' {
+        if bytes[i] == b'.' && (is_decimal_dot(text, i) || is_abbrev_word(text, i)) {
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'.' || bytes[i] == b'!' || bytes[i] == b'?' {
             let mut j = i + 1;
             while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\n' || bytes[j] == b'\t') {
                 j += 1;
@@ -130,6 +171,18 @@ fn factual_verb(s: &str) -> bool {
         " acquired ",
         " deprecated ",
         " replaced ",
+        " serves as ",
+        " leads ",
+        " heads ",
+        " appointed ",
+        " promoted ",
+        " joined ",
+        " chairs ",
+        " chief ",
+        " ceo ",
+        " director ",
+        " serves ",
+        " was named ",
     ]
     .iter()
     .any(|v| lower.contains(v))
@@ -241,6 +294,14 @@ fn classify(s: &str) -> Volatility {
         return Volatility::High;
     }
     if [
+        "ceo", "chief ", "director", "leads ", "heads ", "appointed", "chair", "founder of",
+    ]
+    .iter()
+    .any(|m| lower.contains(m))
+    {
+        return Volatility::High;
+    }
+    if [
         "includes", "offers", "requires", "policy", "plan", "tier", "allows", "provides",
         "supports",
     ]
@@ -253,7 +314,7 @@ fn classify(s: &str) -> Volatility {
 }
 
 fn claiminess(s: &str) -> i64 {
-    if question(s) || instruction(s) || s.trim_end().ends_with(':') || s.chars().count() < 24 {
+    if question(s) || instruction(s) || s.trim_end().ends_with(':') || s.chars().count() < 18 {
         return -10;
     }
     let mut score = 0;
@@ -268,6 +329,8 @@ fn claiminess(s: &str) -> i64 {
     }
     if factual_verb(s) {
         score += 2;
+    } else if proper_nouns(s) >= 2 && s.chars().count() > 30 {
+        score += 1;
     } else {
         score -= 3;
     }
@@ -279,6 +342,9 @@ fn claiminess(s: &str) -> i64 {
     }
     if s.contains("recommended") || s.contains("deprecated") || s.contains("no longer") {
         score += 2;
+    }
+    if s.contains("ceo") || s.contains("chief") || s.contains("appointed") {
+        score += 1;
     }
     score
 }
@@ -308,7 +374,7 @@ pub fn extract_claims(text: &str, max_claims: usize) -> Vec<Claim> {
     for (start, end) in spans {
         let quote = &text[start..end];
         let score = claiminess(quote);
-        if score < 4 {
+        if score < 3 {
             continue;
         }
         let vol = classify(quote);
@@ -342,6 +408,7 @@ pub fn extract_claims(text: &str, max_claims: usize) -> Vec<Claim> {
                 start: start as i64,
                 end: end as i64,
                 evidence: vec![],
+                cited_evidence_ids: vec![],
             }
         })
         .collect()
@@ -397,6 +464,27 @@ mod tests {
         let claims = extract_claims(text, 5);
         let founded = claims.iter().find(|c| c.quote.contains("founded")).unwrap();
         assert_eq!(founded.volatility, "low");
+    }
+
+    #[test]
+    fn extracts_ceo_claim_without_digits() {
+        let text = "Sarah Chen is the chief executive officer of Northwind. Northwind charges $40 per seat per month.";
+        let claims = extract_claims(text, 5);
+        assert!(claims.iter().any(|c| c.quote.contains("Sarah Chen")), "got {:?}", claims.iter().map(|c| c.quote.clone()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn splits_bullets_and_tables() {
+        let text = "- Starter costs $20 per seat.\n- Pro costs $60 per seat.\n| Enterprise | $150 per seat |";
+        let claims = extract_claims(text, 6);
+        assert!(claims.len() >= 2, "got {:?}", claims.iter().map(|c| c.quote.clone()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn decimal_price_is_not_split() {
+        let text = "The plan costs $2.50 per user. It includes storage.";
+        let claims = extract_claims(text, 4);
+        assert!(claims.iter().any(|c| c.quote.contains("2.50")), "got {:?}", claims.iter().map(|c| c.quote.clone()).collect::<Vec<_>>());
     }
 
     #[test]

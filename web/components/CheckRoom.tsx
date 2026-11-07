@@ -4,13 +4,32 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { createCheck, eventsUrl, getCheck } from "@/lib/api";
-import type { Check, CheckEvent } from "@/lib/types";
-import { scoreLine, timeAgo, verdictLabel } from "@/lib/format";
+import type { Check, CheckEvent, Status } from "@/lib/types";
+import {
+  coverageLine,
+  scoreLine,
+  timeAgo,
+  verdictLabel,
+} from "@/lib/format";
 import { Header } from "./Header";
 import { DocumentView } from "./DocumentView";
 import { EvidenceCard } from "./EvidenceCard";
 import { ProofReceipt } from "./ProofReceipt";
 import { ChangesSummary } from "./ChangesSummary";
+
+const STEPS: Array<{ status: Status; label: string }> = [
+  { status: "extracting", label: "Segment" },
+  { status: "verifying", label: "Verify" },
+  { status: "adjudicating", label: "Adjudicate" },
+  { status: "rewriting", label: "Repair" },
+];
+
+function stepIndex(status: Status): number {
+  const order: Status[] = ["queued", "extracting", "verifying", "adjudicating", "rewriting"];
+  const i = order.indexOf(status);
+  if (i < 0) return -1;
+  return Math.min(i, 4);
+}
 
 export function CheckRoom({ id }: { id: string }) {
   const router = useRouter();
@@ -21,8 +40,22 @@ export function CheckRoom({ id }: { id: string }) {
   const [drillBusy, setDrillBusy] = useState(false);
   const [recheckBusy, setRecheckBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedRepaired, setCopiedRepaired] = useState(false);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [mobileTab, setMobileTab] = useState<"document" | "evidence">("document");
   const esRef = useRef<EventSource | null>(null);
   const pollRef = useRef<number | null>(null);
+
+  // Elapsed clock while running.
+  useEffect(() => {
+    if (!startedAt) return;
+    const t = window.setInterval(
+      () => setElapsed(Math.round((Date.now() - startedAt) / 1000)),
+      1000,
+    );
+    return () => window.clearInterval(t);
+  }, [startedAt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +115,13 @@ export function CheckRoom({ id }: { id: string }) {
           });
         } else if (data.type === "done") {
           setCheck(data.check);
+          if (data.check.corrected_text) {
+            // Completion is an event: land on the repaired answer and
+            // select the first changed claim.
+            setView("repaired");
+            const first = data.check.claims.find((c) => c.verdict === "changed");
+            if (first) setSelected(first.id);
+          }
           es.close();
         } else if (data.type === "failed") {
           setError(data.message);
@@ -98,6 +138,12 @@ export function CheckRoom({ id }: { id: string }) {
       .then((initial) => {
         if (cancelled) return;
         setCheck(initial);
+        setStartedAt(Date.now());
+        if (initial.status === "done" && initial.corrected_text) {
+          setView("repaired");
+          const first = initial.claims.find((c) => c.verdict === "changed");
+          if (first) setSelected(first.id);
+        }
         if (initial.status !== "done" && initial.status !== "failed") {
           subscribe();
         }
@@ -119,7 +165,10 @@ export function CheckRoom({ id }: { id: string }) {
     setRecheckBusy(true);
     setError(null);
     try {
-      const { id: nextId } = await createCheck(check.input_text, "recheck", false);
+      const { id: nextId } = await createCheck(check.input_text, "recheck", false, {
+        url: check.source_url ?? undefined,
+        recheck_of: check.id,
+      });
       router.push(`/check/${nextId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start a new check.");
@@ -150,8 +199,20 @@ export function CheckRoom({ id }: { id: string }) {
     }
   }
 
+  async function copyRepaired() {
+    if (!check?.corrected_text) return;
+    try {
+      await navigator.clipboard.writeText(check.corrected_text);
+      setCopiedRepaired(true);
+      window.setTimeout(() => setCopiedRepaired(false), 1800);
+    } catch {
+      setCopiedRepaired(false);
+    }
+  }
+
   function selectClaim(claimId: string) {
     setSelected(claimId);
+    setMobileTab("evidence");
     document
       .getElementById(`evidence-${claimId}`)
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -159,6 +220,7 @@ export function CheckRoom({ id }: { id: string }) {
 
   function selectFromMargin(claimId: string) {
     setSelected(claimId);
+    setMobileTab("document");
     document
       .getElementById(`claim-${claimId}`)
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -192,6 +254,7 @@ export function CheckRoom({ id }: { id: string }) {
   const claims = [...check.claims].sort((a, b) => a.idx - b.idx);
   const running = check.status !== "done" && check.status !== "failed";
   const score = check.freshness_score;
+  const currentStep = running ? stepIndex(check.status) : 5;
   const strip =
     claims.length > 0
       ? claims
@@ -207,6 +270,7 @@ export function CheckRoom({ id }: { id: string }) {
         <div className="check-topline">
           <span>
             Check {check.id.slice(0, 8)} · started {timeAgo(check.created_at)}
+            {check.source_url ? ` · ${check.source_url}` : ` · ${check.source}`}
           </span>
           <span style={{ display: "flex", gap: 18 }}>
             <button
@@ -229,14 +293,50 @@ export function CheckRoom({ id }: { id: string }) {
           </span>
         </div>
 
+        <div className="stepper" aria-label="Check progress" role="status">
+          {STEPS.map((s, i) => (
+            <span
+              key={s.status}
+              className={`stepper-step ${currentStep > i ? "is-done" : ""} ${
+                running && currentStep === i + 1 ? "is-active" : ""
+              }`}
+            >
+              <i>{i + 1}</i> {s.label}
+            </span>
+          ))}
+          <span className="stepper-time">
+            {running ? `checking… ${elapsed}s · usually under a minute` : check.stage_message}
+          </span>
+        </div>
+
+        <div className="sr-status" aria-live="polite">
+          {check.stage_message}
+          {check.status === "done" &&
+            ` Freshness ${score === null ? "not scored" : `${Math.round(score)} out of 100`}. ${check.changed_count} claims changed.`}
+        </div>
+
         {check.status === "failed" && (
-          <div className="failed-box">
+          <div className="failed-box" role="alert">
             <h2>The check stopped before a verdict.</h2>
             <p>{check.error ?? "A source or model was unavailable."}</p>
             <p style={{ marginTop: 8 }}>
-              Nothing was guessed. Try again, or inspect the receipt below for
-              the failing route.
+              Nothing was guessed. Try again, or inspect the receipt for the
+              failing route.
             </p>
+            <p style={{ marginTop: 16 }}>
+              <button type="button" className="btn" onClick={recheck}>
+                Retry this check
+              </button>
+            </p>
+          </div>
+        )}
+
+        {check.recheck_of && (
+          <div className="delta-banner">
+            Re-checked from <Link href={`/check/${check.recheck_of}`}>{check.recheck_of.slice(0, 8)}</Link>.
+            {check.changed_count > 0
+              ? ` ${check.changed_count} claim(s) still contradict current sources.`
+              : " Nothing new contradicted the previous check."}
           </div>
         )}
 
@@ -246,9 +346,12 @@ export function CheckRoom({ id }: { id: string }) {
               {score === null ? "—" : Math.round(score)}
             </div>
             <div className="score-meta">
-              <div className="score-label">Freshness / 100</div>
+              <div className="score-label">Freshness / 100 · adjudicated only</div>
               <p className="score-line">
                 {scoreLine(score, check.changed_count)}
+              </p>
+              <p className="score-sub">
+                {coverageLine(check.coverage, check.adjudicated_count, claims.length)}
               </p>
             </div>
           </div>
@@ -301,7 +404,28 @@ export function CheckRoom({ id }: { id: string }) {
           </div>
         </section>
 
-        <div className="room-grid">
+        <ChangesSummary claims={claims} />
+
+        <div className="mobile-tabs" role="group" aria-label="Room view">
+          <button
+            type="button"
+            aria-pressed={mobileTab === "document"}
+            className={mobileTab === "document" ? "is-active" : ""}
+            onClick={() => setMobileTab("document")}
+          >
+            Document
+          </button>
+          <button
+            type="button"
+            aria-pressed={mobileTab === "evidence"}
+            className={mobileTab === "evidence" ? "is-active" : ""}
+            onClick={() => setMobileTab("evidence")}
+          >
+            Evidence ({claims.length})
+          </button>
+        </div>
+
+        <div className="room-grid" data-mobile-tab={mobileTab}>
           <div className="document-column">
             <DocumentView
               check={check}
@@ -310,18 +434,22 @@ export function CheckRoom({ id }: { id: string }) {
               view={view}
               onViewChange={setView}
             />
-            <ProofReceipt
-              check={check}
-              onDrill={drill}
-              drillBusy={drillBusy}
-            />
+            {!running && check.corrected_text && (
+              <div className="payoff-bar">
+                <strong>{check.changed_count} claim(s) repaired.</strong>
+                <span>Only contradicted sentences changed.</span>
+                <button type="button" className="btn btn--small" onClick={copyRepaired}>
+                  {copiedRepaired ? "Copied" : "Copy repaired"}
+                </button>
+              </div>
+            )}
             <p className="score-note">
-              The freshness score is the importance-weighted average of cited
-              verdicts: supported and stable count 1.0, unverifiable 0.5,
-              changed 0.0. It summarizes evidence, not probability.{" "}
+              The score covers only claims that were actually verified:
+              supported counts 1.0, changed and unverifiable count 0.0, stable
+              claims are excluded. It summarizes cited evidence, not
+              probability.{" "}
               <Link href="/method">Read the method →</Link>
             </p>
-            <ChangesSummary claims={claims} />
           </div>
 
           <aside className="margin-panel" aria-label="Evidence margin">
@@ -335,7 +463,7 @@ export function CheckRoom({ id }: { id: string }) {
               <p className="empty-margin">
                 {running
                   ? "Segmenting the answer. Claims will appear here with exact offsets."
-                  : "No time-sensitive factual claims were found in this answer."}
+                  : "No time-sensitive factual claims were found in this answer — nothing to expire."}
               </p>
             )}
             {claims.map((claim) => (
@@ -348,6 +476,8 @@ export function CheckRoom({ id }: { id: string }) {
             ))}
           </aside>
         </div>
+
+        <ProofReceipt check={check} onDrill={drill} drillBusy={drillBusy} />
       </main>
     </>
   );

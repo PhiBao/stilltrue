@@ -2,7 +2,7 @@ name: stilltrue
 
 services:
   bifrost:
-    image: maximhq/bifrost:latest
+    image: maximhq/bifrost@sha256:a1c90607dcfd13c1fb2f9476ceb3bb24407a50ade7fdf3e61a59fb42b09e5c57
     container_name: stilltrue-bifrost
     restart: unless-stopped
     environment:
@@ -14,8 +14,16 @@ services:
     networks:
       - stilltrue
 
+  drill:
+    build:
+      context: ./infra/drill-server
+    container_name: stilltrue-drill
+    restart: unless-stopped
+    networks:
+      - stilltrue
+
   stilltrue-ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429
     container_name: stilltrue-ollama
     restart: unless-stopped
     profiles:
@@ -42,7 +50,8 @@ services:
       TAVILY_API_KEY: ${TAVILY_API_KEY}
       MAX_CLAIMS: 6
       TAVILY_MAX_RESULTS: 4
-      EXTRACTION_MODE: heuristic
+      EXTRACTION_MODE: hybrid
+      RATE_LIMIT_PER_HOUR: 200
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3100}
     ports:
       - "8788:8788"
@@ -50,6 +59,7 @@ services:
       - api-data:/app/data
     depends_on:
       - bifrost
+      - drill
     networks:
       - stilltrue
 

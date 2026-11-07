@@ -20,11 +20,15 @@ export async function createCheck(
   text: string,
   source = "pasted",
   drill = false,
+  opts: { url?: string; recheck_of?: string } = {},
 ): Promise<{ id: string }> {
+  const payload: Record<string, unknown> = { text, source, drill };
+  if (opts.url) payload.url = opts.url;
+  if (opts.recheck_of) payload.recheck_of = opts.recheck_of;
   const res = await fetch(`${API_BASE}/api/checks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, source, drill }),
+    body: JSON.stringify(payload),
   });
   return json<{ id: string }>(res);
 }

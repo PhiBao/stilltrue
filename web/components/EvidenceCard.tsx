@@ -1,3 +1,5 @@
+"use client";
+
 import type { Claim } from "@/lib/types";
 import { domain, safeHref, shortDate, truncate, verdictLabel } from "@/lib/format";
 
@@ -11,23 +13,34 @@ export function EvidenceCard({
   onSelect: (id: string) => void;
 }) {
   const pending = claim.verdict === "pending";
+  const cited = new Set((claim.cited_evidence_ids ?? []).map((s) => s.toLowerCase()));
   return (
     <article
       id={`evidence-${claim.id}`}
+      data-selected={selected}
       className={`evidence-card ${selected ? "is-selected" : ""}`}
-      onClick={() => onSelect(claim.id)}
     >
-      <div className="evidence-top">
-        <span className="evidence-index">
-          {String(claim.idx + 1).padStart(2, "0")}
-        </span>
-        <span className={`chip chip--${claim.verdict}`}>
-          {pending ? "Checking" : verdictLabel(claim.verdict)}
-        </span>
-        <span className="volatility">{claim.volatility} volatility</span>
-      </div>
-
-      <p className="claim-quote">“{claim.quote}”</p>
+      <button
+        type="button"
+        className="evidence-select"
+        aria-pressed={selected}
+        aria-label={`Select claim ${claim.idx + 1} to locate it in the document`}
+        onClick={() => onSelect(claim.id)}
+      >
+        <div className="evidence-top">
+          <span className="evidence-index">
+            {String(claim.idx + 1).padStart(2, "0")}
+          </span>
+          <span className={`chip chip--${claim.verdict}`}>
+            {pending ? "Checking" : verdictLabel(claim.verdict)}
+          </span>
+          <span className="volatility">
+            {claim.volatility}
+            {claim.volatility_reason ? ` · ${claim.volatility_reason}` : ""}
+          </span>
+        </div>
+        <p className="claim-quote">“{claim.quote}”</p>
+      </button>
 
       {pending && (
         <>
@@ -52,25 +65,30 @@ export function EvidenceCard({
 
       {claim.evidence.length > 0 && (
         <div className="sources">
-          {claim.evidence.slice(0, 3).map((e) => (
-            <a
-              key={e.id}
-              className="source"
-              href={safeHref(e.url)}
-              target="_blank"
-              rel="noreferrer noopener"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div className="source-head">
-                <span className="source-title">{e.title} ↗</span>
-                <span className="source-meta">
-                  {domain(e.url)} ·{" "}
-                  {shortDate(e.published_date ?? e.retrieved_at)}
-                </span>
-              </div>
-              <p className="source-quote">{truncate(e.quote, 210)}</p>
-            </a>
-          ))}
+          {claim.evidence.map((e, i) => {
+            const decisive = cited.has(e.id.toLowerCase());
+            return (
+              <a
+                key={e.id}
+                className={`source ${decisive ? "source--decisive" : ""}`}
+                href={safeHref(e.url)}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                <div className="source-head">
+                  <span className="source-title">
+                    [{i + 1}] {e.title} ↗
+                    {decisive && <span className="decisive-tag"> decisive</span>}
+                  </span>
+                  <span className="source-meta">
+                    {domain(e.url)} · pub {shortDate(e.published_date)} · got{" "}
+                    {shortDate(e.retrieved_at)}
+                  </span>
+                </div>
+                <p className="source-quote">{truncate(e.quote, 260)}</p>
+              </a>
+            );
+          })}
         </div>
       )}
 

@@ -14,3 +14,4 @@ web/.env.local
 
 __pycache__/
 *.tsbuildinfo
+rustc-ice-*.txt

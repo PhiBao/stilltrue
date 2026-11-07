@@ -114,15 +114,17 @@ pub async fn run_check(state: Arc<AppState>, mut check: Check) -> anyhow::Result
     if let Err(err) = result {
         warn!(check_id = %check.id, error = %err, "check failed");
         check.status = "failed".into();
-        check.error = Some(err.to_string());
+        check.error = Some("Verification failed. No claim was guessed.".to_string());
         check.stage_message = "Verification stopped".into();
         check.completed_at = Some(Utc::now().to_rfc3339());
         let _ = db::save_check(&state.db, &check).await;
+        state.finish_check(&check.id).await;
         state
             .emit(
                 &check.id,
                 CheckEvent::Failed {
-                    message: err.to_string(),
+                    message: "Verification failed. No claim was guessed."
+                        .to_string(),
                 },
             )
             .await;
@@ -189,7 +191,23 @@ async fn run_inner(
         };
         normalize_claims(&check.input_text, list, cfg.max_claims)
     } else {
-        extract::extract_claims(&check.input_text, cfg.max_claims)
+        // Hybrid default: deterministic first. If it finds too little (or the
+        // input is markdown/list-heavy), fall back to the LLM extractor.
+        let heuristic = extract::extract_claims(&check.input_text, cfg.max_claims);
+        let needs_llm = heuristic.len() < 2
+            || looks_structured(&check.input_text);
+        if needs_llm {
+            match llm_extract(state, check, started).await {
+                Ok(llm_claims) if !llm_claims.is_empty() => llm_claims,
+                Ok(_) => heuristic,
+                Err(err) => {
+                    warn!(error = %err, "hybrid llm extraction failed; using heuristic claims");
+                    heuristic
+                }
+            }
+        } else {
+            heuristic
+        }
     };
 
     if claims.is_empty() {
@@ -243,9 +261,9 @@ async fn run_inner(
     for claim in check.claims.iter_mut() {
         if !claim.is_time_sensitive() {
             claim.verdict = VERDICT_STABLE.into();
-            claim.confidence = 1.0;
+            claim.confidence = 0.0;
             claim.explanation =
-                "Stable fact; not time-sensitive, so it was not re-researched.".into();
+                "Stable fact; not time-sensitive, so it was not re-researched and does not count toward freshness.".into();
             state
                 .emit(
                     &check.id,
@@ -380,6 +398,7 @@ async fn run_inner(
         "check complete"
     );
 
+    state.finish_check(&check.id).await;
     state
         .emit(
             &check.id,
@@ -389,6 +408,46 @@ async fn run_inner(
         )
         .await;
     Ok(())
+}
+
+fn looks_structured(text: &str) -> bool {
+    text.lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("- ")
+                || t.starts_with("* ")
+                || t.starts_with("| ")
+                || (t.len() > 2
+                    && t.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+                    && (t[1..].starts_with(". ") || t[1..].starts_with(") ")))
+        })
+        .count()
+        >= 2
+}
+
+async fn llm_extract(
+    state: &Arc<AppState>,
+    check: &mut Check,
+    _started: Instant,
+) -> anyhow::Result<Vec<Claim>> {
+    let prompt = extraction_prompt(&check.input_text, state.cfg.max_claims);
+    let extraction = call_llm(
+        state,
+        EXTRACTION_SYSTEM,
+        &prompt,
+        1800,
+        check.proof.drill,
+        &mut check.proof,
+    )
+    .await
+    .context("claim extraction")?;
+    let list = decode_claim_list(extraction.value.clone())
+        .context("decode claim extraction JSON")?;
+    Ok(normalize_claims(
+        &check.input_text,
+        list,
+        state.cfg.max_claims,
+    ))
 }
 
 fn short_error(s: &str) -> String {
@@ -601,6 +660,7 @@ fn normalize_claims(text: &str, raw: Vec<LlmClaim>, max_claims: usize) -> Vec<Cl
                 start: start as i64,
                 end: end as i64,
                 evidence: vec![],
+                cited_evidence_ids: vec![],
             }
         })
         .collect()
@@ -647,18 +707,36 @@ fn apply_verdicts(claims: &mut [Claim], verdicts: &[LlmVerdict]) {
             verdict = VERDICT_UNVERIFIABLE.into();
         }
 
+        // Low confidence never produces a green/red verdict.
+        let conf = v.confidence.clamp(0.0, 1.0);
+        if conf < 0.6 && verdict != VERDICT_UNVERIFIABLE {
+            verdict = VERDICT_UNVERIFIABLE.into();
+        }
+
         let corrected = v.corrected_text.as_ref().map(|s| s.trim().to_string());
         if verdict == VERDICT_CHANGED {
-            match corrected {
-                Some(ref c) if c.len() >= 6 => {}
-                _ => {
-                    verdict = VERDICT_UNVERIFIABLE.into();
-                }
+            let grounded = corrected.as_deref().is_some_and(|c| {
+                c.len() >= 6
+                    && correction_grounded(c, claim, &cited)
+                    && !same_as_original(c, &claim.quote)
+            });
+            if !grounded {
+                // If the "correction" is just the original claim restated,
+                // the evidence actually supports it.
+                let restated = corrected
+                    .as_deref()
+                    .is_some_and(|c| same_as_original(c, &claim.quote));
+                verdict = if restated && !cited.is_empty() {
+                    VERDICT_SUPPORTED.into()
+                } else {
+                    VERDICT_UNVERIFIABLE.into()
+                };
             }
         }
 
+        claim.cited_evidence_ids = cited;
         claim.verdict = verdict.clone();
-        claim.confidence = v.confidence.clamp(0.0, 1.0);
+        claim.confidence = conf;
         claim.explanation = v.explanation.trim().chars().take(260).collect();
         claim.corrected_text = if verdict == VERDICT_CHANGED {
             corrected
@@ -666,6 +744,107 @@ fn apply_verdicts(claims: &mut [Claim], verdicts: &[LlmVerdict]) {
             None
         };
     }
+}
+
+fn same_as_original(correction: &str, original: &str) -> bool {
+    fn norm(s: &str) -> String {
+        // Canonicalize numbers ($10.00 == $10) and lower alpha tokens.
+        let lower = s.to_lowercase();
+        let mut out = String::new();
+        let mut num = String::new();
+        let mut flush = |num: &mut String, out: &mut String| {
+            if !num.is_empty() {
+                let canon = if num.contains('.') {
+                    let t = num.trim_end_matches('0').trim_end_matches('.');
+                    if t.is_empty() || t == "-" { "0" } else { t }
+                } else {
+                    num.as_str()
+                };
+                out.push_str(canon);
+                num.clear();
+            }
+        };
+        for c in lower.chars() {
+            if c.is_ascii_digit() || c == '.' || c == ',' {
+                num.push(c);
+            } else {
+                flush(&mut num, &mut out);
+                if c.is_alphanumeric() {
+                    out.push(c);
+                } else {
+                    out.push(' ');
+                }
+            }
+        }
+        flush(&mut num, &mut out);
+        let mut tokens: Vec<&str> = out.split_whitespace().collect();
+        tokens.dedup();
+        tokens.sort_unstable();
+        tokens.join(" ")
+    }
+    !norm(correction).is_empty() && norm(correction) == norm(original)
+}
+
+/// Every number/date in the correction must appear in a cited evidence
+/// snippet. Otherwise a hallucinating model could cite a real page
+/// and inject an invented value into the user's document.
+fn correction_grounded(correction: &str, claim: &Claim, cited_ids: &[String]) -> bool {
+    let tokens = grounding_tokens(correction);
+    if tokens.is_empty() {
+        return true;
+    }
+    let lower_cited: Vec<String> = cited_ids
+        .iter()
+        .map(|id| id.to_lowercase())
+        .collect();
+    let cited_quotes: Vec<String> = claim
+        .evidence
+        .iter()
+        .filter(|e| lower_cited.contains(&e.id.to_lowercase()))
+        .map(|e| e.quote.to_lowercase())
+        .collect();
+    if cited_quotes.is_empty() {
+        return false;
+    }
+    tokens.iter().all(|tok| {
+        cited_quotes
+            .iter()
+            .any(|q| q.contains(tok))
+    })
+}
+
+fn grounding_tokens(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let lower = text.to_lowercase();
+    // Money / percents with their numbers.
+    for part in lower.split(|c: char| !c.is_ascii_digit() && c != '.' && c != ',' && c != '%') {
+        let t = part.trim().trim_matches('.');
+        if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',') {
+            let norm = t.replace(',', "");
+            if !norm.is_empty() && norm.chars().any(|c| c.is_ascii_digit()) {
+                out.push(norm);
+                // Also keep the raw form (e.g. 2,500 vs 2500).
+                if !out.contains(&t.to_string()) {
+                    out.push(t.to_string());
+                }
+            }
+        }
+    }
+    // Years / dates.
+    let bytes = lower.as_bytes();
+    if bytes.len() >= 4 {
+        for w in bytes.windows(4) {
+            if w.iter().all(|c| c.is_ascii_digit()) {
+                let y = String::from_utf8_lossy(w).to_string();
+                if (y.starts_with("19") || y.starts_with("20")) && !out.contains(&y) {
+                    out.push(y);
+                }
+            }
+        }
+    }
+    // Month names (e.g. "August 2026") are low-value; numbers suffice.
+    out.retain(|t| !t.is_empty());
+    out
 }
 
 /// Replace only changed claim quotes, from the end of the document backwards so
@@ -744,6 +923,7 @@ mod tests {
                 start: 0,
                 end: 7,
                 evidence: vec![],
+                cited_evidence_ids: vec![],
             },
             Claim {
                 id: "c2".into(),
@@ -761,6 +941,7 @@ mod tests {
                 start: 8,
                 end: 15,
                 evidence: vec![],
+                cited_evidence_ids: vec![],
             },
         ];
         assert_eq!(
@@ -786,6 +967,7 @@ mod tests {
             importance: 3,
             start: 0,
             end: 15,
+            cited_evidence_ids: vec![],
             evidence: vec![Evidence {
                 id: "c1-E1".into(),
                 title: "Pricing".into(),
@@ -827,6 +1009,7 @@ mod tests {
             start: 0,
             end: 1,
             evidence: vec![],
+            cited_evidence_ids: vec![],
         }];
         let verdicts = vec![LlmVerdict {
             claim_id: "c1".into(),
@@ -839,5 +1022,99 @@ mod tests {
         apply_verdicts(&mut claims, &verdicts);
         assert_eq!(claims[0].verdict, VERDICT_UNVERIFIABLE);
         assert!(claims[0].corrected_text.is_none());
+    }
+
+    #[test]
+    fn ungrounded_correction_is_downgraded() {
+        let mut claims = vec![Claim {
+            id: "c1".into(),
+            idx: 0,
+            quote: "Acme costs $5.".into(),
+            text: "Acme costs $5.".into(),
+            volatility: "high".into(),
+            volatility_reason: String::new(),
+            query: String::new(),
+            verdict: VERDICT_PENDING.into(),
+            confidence: 0.0,
+            explanation: String::new(),
+            corrected_text: None,
+            importance: 3,
+            start: 0,
+            end: 15,
+            cited_evidence_ids: vec![],
+            evidence: vec![Evidence {
+                id: "c1-E1".into(),
+                title: "Pricing".into(),
+                url: "https://example.com".into(),
+                quote: "Acme costs $7 per seat.".into(),
+                published_date: None,
+                retrieved_at: "2026-11-01T00:00:00Z".into(),
+                score: 0.9,
+            }],
+        }];
+        // Correction invents $99 which is not in the cited snippet.
+        let verdicts = vec![LlmVerdict {
+            claim_id: "c1".into(),
+            verdict: "changed".into(),
+            confidence: 0.9,
+            explanation: "Price is now $99.".into(),
+            corrected_text: Some("Acme costs $99 per seat.".into()),
+            evidence_ids: vec!["c1-E1".into()],
+        }];
+        apply_verdicts(&mut claims, &verdicts);
+        assert_eq!(claims[0].verdict, VERDICT_UNVERIFIABLE);
+        assert!(claims[0].corrected_text.is_none());
+    }
+
+    #[test]
+    fn restated_correction_becomes_supported() {
+        assert!(same_as_original(
+            "GPT-4 Turbo costs $10.00 per million input tokens and $30.00 per million output tokens.",
+            "GPT-4 Turbo costs $10 per million input tokens and $30 per million output tokens."
+        ));
+        assert!(!same_as_original(
+            "GPT-4o costs $2.50 per million input tokens and $10 per million output tokens.",
+            "GPT-4o costs $5 per million input tokens and $15 per million output tokens."
+        ));
+    }
+
+    #[test]
+    fn low_confidence_is_downgraded() {
+        let mut claims = vec![Claim {
+            id: "c1".into(),
+            idx: 0,
+            quote: "Acme costs $5.".into(),
+            text: "Acme costs $5.".into(),
+            volatility: "high".into(),
+            volatility_reason: String::new(),
+            query: String::new(),
+            verdict: VERDICT_PENDING.into(),
+            confidence: 0.0,
+            explanation: String::new(),
+            corrected_text: None,
+            importance: 3,
+            start: 0,
+            end: 15,
+            cited_evidence_ids: vec![],
+            evidence: vec![Evidence {
+                id: "c1-E1".into(),
+                title: "Pricing".into(),
+                url: "https://example.com".into(),
+                quote: "Acme costs $5 per seat.".into(),
+                published_date: None,
+                retrieved_at: "2026-11-01T00:00:00Z".into(),
+                score: 0.9,
+            }],
+        }];
+        let verdicts = vec![LlmVerdict {
+            claim_id: "c1".into(),
+            verdict: "supported".into(),
+            confidence: 0.3,
+            explanation: "Probably fine.".into(),
+            corrected_text: None,
+            evidence_ids: vec!["c1-E1".into()],
+        }];
+        apply_verdicts(&mut claims, &verdicts);
+        assert_eq!(claims[0].verdict, VERDICT_UNVERIFIABLE);
     }
 }

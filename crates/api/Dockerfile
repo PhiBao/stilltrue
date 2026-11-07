@@ -1,4 +1,4 @@
-FROM rust:bookworm AS builder
+FROM rust@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libsqlite3-dev ca-certificates \
@@ -9,7 +9,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN cargo build --release -p stilltrue-api
 
-FROM debian:bookworm-slim AS runtime
+FROM debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libsqlite3-0 \

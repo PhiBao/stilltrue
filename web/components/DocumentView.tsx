@@ -7,7 +7,7 @@ import { verdictLabel } from "@/lib/format";
 type Segment =
   | { kind: "text"; text: string }
   | { kind: "claim"; text: string; claim: Claim }
-  | { kind: "corrected"; text: string };
+  | { kind: "corrected"; text: string; claim?: Claim };
 
 function originalSegments(text: string, claims: Claim[]): Segment[] {
   const sorted = [...claims]
@@ -34,20 +34,24 @@ function originalSegments(text: string, claims: Claim[]): Segment[] {
 }
 
 function correctedSegments(text: string, claims: Claim[]): Segment[] {
-  const marks = claims
+  // Locate corrections by claim offsets in the original text, then map them
+  // into the corrected text by walking in document order so duplicated
+  // strings resolve correctly. Each mark also knows its claim for
+  // click-through back to evidence.
+  const ordered = [...claims]
     .filter((c) => c.verdict === "changed" && c.corrected_text)
-    .map((c) => ({ text: c.corrected_text as string, start: text.indexOf(c.corrected_text as string) }))
-    .filter((m) => m.start >= 0)
     .sort((a, b) => a.start - b.start);
   const out: Segment[] = [];
   let cursor = 0;
-  for (const mark of marks) {
-    if (mark.start < cursor) continue;
-    if (mark.start > cursor) {
-      out.push({ kind: "text", text: text.slice(cursor, mark.start) });
+  for (const claim of ordered) {
+    const corrected = claim.corrected_text as string;
+    const found = text.indexOf(corrected, cursor);
+    if (found < 0) continue;
+    if (found > cursor) {
+      out.push({ kind: "text", text: text.slice(cursor, found) });
     }
-    out.push({ kind: "corrected", text: mark.text });
-    cursor = mark.start + mark.text.length;
+    out.push({ kind: "corrected", text: corrected, claim });
+    cursor = found + corrected.length;
   }
   if (cursor < text.length) {
     out.push({ kind: "text", text: text.slice(cursor) });
@@ -131,6 +135,19 @@ export function DocumentView({
             );
           }
           if (segment.kind === "corrected") {
+            if (segment.claim) {
+              return (
+                <button
+                  key={`m-${i}`}
+                  type="button"
+                  className={`corrected-mark corrected-mark--button ${selected === segment.claim.id ? "is-selected" : ""}`}
+                  onClick={() => onSelect(segment.claim!.id)}
+                  aria-label={`Repaired claim ${segment.claim.idx + 1}; view its evidence`}
+                >
+                  {segment.text}
+                </button>
+              );
+            }
             return (
               <mark key={`m-${i}`} className="corrected-mark">
                 {segment.text}

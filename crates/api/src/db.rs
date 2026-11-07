@@ -43,6 +43,27 @@ async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_checks_created ON checks(created_at DESC);")
         .execute(pool)
         .await?;
+
+    // Additive columns for newer builds; idempotent via PRAGMA check.
+    let cols: Vec<String> = sqlx::query("PRAGMA table_info(checks)")
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(|r| {
+            use sqlx::Row;
+            r.try_get::<String, _>("name").unwrap_or_default()
+        })
+        .collect();
+    if !cols.iter().any(|c| c == "recheck_of") {
+        sqlx::query("ALTER TABLE checks ADD COLUMN recheck_of TEXT")
+            .execute(pool)
+            .await?;
+    }
+    if !cols.iter().any(|c| c == "source_url") {
+        sqlx::query("ALTER TABLE checks ADD COLUMN source_url TEXT")
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -54,8 +75,9 @@ pub async fn save_check(pool: &SqlitePool, check: &Check) -> anyhow::Result<()> 
         INSERT INTO checks (
             id, input_text, source, status, stage_message, freshness_score,
             claim_count, changed_count, supported_count, unverifiable_count, stable_count,
-            corrected_text, created_at, completed_at, error, claims_json, proof_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            corrected_text, created_at, completed_at, error, claims_json, proof_json,
+            recheck_of, source_url
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             status = excluded.status,
             stage_message = excluded.stage_message,
@@ -69,7 +91,9 @@ pub async fn save_check(pool: &SqlitePool, check: &Check) -> anyhow::Result<()> 
             completed_at = excluded.completed_at,
             error = excluded.error,
             claims_json = excluded.claims_json,
-            proof_json = excluded.proof_json
+            proof_json = excluded.proof_json,
+            recheck_of = excluded.recheck_of,
+            source_url = excluded.source_url
         "#,
     )
     .bind(&check.id)
@@ -89,6 +113,8 @@ pub async fn save_check(pool: &SqlitePool, check: &Check) -> anyhow::Result<()> 
     .bind(&check.error)
     .bind(claims_json)
     .bind(proof_json)
+    .bind(&check.recheck_of)
+    .bind(&check.source_url)
     .execute(pool)
     .await?;
     Ok(())
@@ -115,8 +141,12 @@ fn row_to_check(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<Check> {
         created_at: row.try_get("created_at")?,
         completed_at: row.try_get("completed_at")?,
         error: row.try_get("error")?,
+        adjudicated_count: crate::models::adjudicated_count(&claims),
+        coverage: crate::models::coverage(&claims),
         claims,
         proof,
+        recheck_of: row.try_get::<Option<String>, _>("recheck_of").unwrap_or(None),
+        source_url: row.try_get::<Option<String>, _>("source_url").unwrap_or(None),
     })
 }
 
@@ -133,7 +163,7 @@ pub async fn get_check(pool: &SqlitePool, id: &str) -> anyhow::Result<Option<Che
 
 pub async fn list_checks(pool: &SqlitePool, limit: i64) -> anyhow::Result<Vec<CheckSummary>> {
     let rows = sqlx::query(
-        "SELECT id, input_text, source, status, freshness_score, claim_count, changed_count, created_at
+        "SELECT id, input_text, source, status, freshness_score, claim_count, changed_count, created_at, recheck_of
          FROM checks ORDER BY created_at DESC LIMIT ?",
     )
     .bind(limit.clamp(1, 50))
@@ -151,6 +181,7 @@ pub async fn list_checks(pool: &SqlitePool, limit: i64) -> anyhow::Result<Vec<Ch
             claim_count: row.try_get("claim_count")?,
             changed_count: row.try_get("changed_count")?,
             created_at: row.try_get("created_at")?,
+            recheck_of: row.try_get::<Option<String>, _>("recheck_of").unwrap_or(None),
         });
     }
     Ok(out)

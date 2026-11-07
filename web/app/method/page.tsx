@@ -133,10 +133,7 @@ export default function MethodPage() {
           keep Tavily credit use predictable. The demo deployment uses
           TokenFactory (Nebius) with a metered key; Pollinations remains a free
           fallback. The architecture is provider-agnostic and a production
-          deployment can point the same Bifrost virtual key at a frontier model. The scoring weights are explicit: supported and
-          stable count 1.0, unverifiable 0.5, changed 0.0, weighted by claim
-          importance. The score is a summary of cited verdicts, not a
-          probability.
+          deployment can point the same Bifrost virtual key at a frontier model. The scoring is explicit and conservative: only adjudicated claims count (supported 1.0, changed and unverifiable 0.0, weighted by importance); stable claims are excluded and coverage is shown separately. A check with nothing verified scores blank, never 50. Corrections must be grounded: every number in a replacement must appear in a cited source, and low-confidence verdicts become unverifiable.
         </p>
 
         <p style={{ marginTop: 34 }}>

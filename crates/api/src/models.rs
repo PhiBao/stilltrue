@@ -35,6 +35,8 @@ pub struct Claim {
     pub end: i64,
     #[serde(default)]
     pub evidence: Vec<Evidence>,
+    #[serde(default)]
+    pub cited_evidence_ids: Vec<String>,
 }
 
 impl Claim {
@@ -83,14 +85,27 @@ pub struct Check {
     pub error: Option<String>,
     pub claims: Vec<Claim>,
     pub proof: Proof,
+    #[serde(default)]
+    pub adjudicated_count: i64,
+    #[serde(default)]
+    pub coverage: Option<f64>,
+    #[serde(default)]
+    pub recheck_of: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateCheckRequest {
+    #[serde(default)]
     pub text: String,
+    #[serde(default)]
+    pub url: Option<String>,
     pub source: Option<String>,
     #[serde(default)]
     pub drill: bool,
+    #[serde(default)]
+    pub recheck_of: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -103,6 +118,8 @@ pub struct CheckSummary {
     pub claim_count: i64,
     pub changed_count: i64,
     pub created_at: String,
+    #[serde(default)]
+    pub recheck_of: Option<String>,
 }
 
 impl From<&Check> for CheckSummary {
@@ -117,6 +134,7 @@ impl From<&Check> for CheckSummary {
             claim_count: c.claim_count,
             changed_count: c.changed_count,
             created_at: c.created_at.clone(),
+            recheck_of: c.recheck_of.clone(),
         }
     }
 }
@@ -179,12 +197,20 @@ pub struct LlmVerdictList {
     pub verdicts: Vec<LlmVerdict>,
 }
 
-/// Deterministic freshness score. Weighted by how much a reader would rely on a claim.
-/// supported/stable = 1.0, unverifiable = 0.5, changed = 0.0.
+/// Deterministic freshness score over *adjudicated* claims only.
+/// supported = 1.0, changed = 0.0, unverifiable = 0.0 (not verified).
+/// Stable claims were never researched and never affect the score.
+/// Coverage (adjudicated / extracted) is reported separately so a
+/// check with no verified claims cannot look like a passing grade.
 pub fn freshness_score(claims: &[Claim]) -> Option<f64> {
     let scored: Vec<&Claim> = claims
         .iter()
-        .filter(|c| c.verdict != VERDICT_PENDING)
+        .filter(|c| {
+            matches!(
+                c.verdict.as_str(),
+                VERDICT_SUPPORTED | VERDICT_CHANGED | VERDICT_UNVERIFIABLE
+            )
+        })
         .collect();
     if scored.is_empty() {
         return None;
@@ -194,10 +220,10 @@ pub fn freshness_score(claims: &[Claim]) -> Option<f64> {
     for c in scored {
         let w = c.importance.clamp(1, 3) as f64;
         let v = match c.verdict.as_str() {
-            VERDICT_SUPPORTED | VERDICT_STABLE => 1.0,
-            VERDICT_UNVERIFIABLE => 0.5,
+            VERDICT_SUPPORTED => 1.0,
             VERDICT_CHANGED => 0.0,
-            _ => 0.5,
+            VERDICT_UNVERIFIABLE => 0.0,
+            _ => 0.0,
         };
         weight_sum += w;
         value_sum += w * v;
@@ -206,6 +232,26 @@ pub fn freshness_score(claims: &[Claim]) -> Option<f64> {
         return None;
     }
     Some(((value_sum / weight_sum) * 100.0).round())
+}
+
+pub fn adjudicated_count(claims: &[Claim]) -> i64 {
+    claims
+        .iter()
+        .filter(|c| {
+            matches!(
+                c.verdict.as_str(),
+                VERDICT_SUPPORTED | VERDICT_CHANGED | VERDICT_UNVERIFIABLE
+            )
+        })
+        .count() as i64
+}
+
+pub fn coverage(claims: &[Claim]) -> Option<f64> {
+    if claims.is_empty() {
+        return None;
+    }
+    let adj = adjudicated_count(claims) as f64;
+    Some(((adj / claims.len() as f64) * 100.0).round())
 }
 
 pub fn recompute_counts(check: &mut Check) {
@@ -231,6 +277,8 @@ pub fn recompute_counts(check: &mut Check) {
         .filter(|c| c.verdict == VERDICT_STABLE)
         .count() as i64;
     check.freshness_score = freshness_score(&check.claims);
+    check.adjudicated_count = adjudicated_count(&check.claims);
+    check.coverage = coverage(&check.claims);
 }
 
 #[cfg(test)]
@@ -254,6 +302,7 @@ mod tests {
             start: 0,
             end: 1,
             evidence: vec![],
+            cited_evidence_ids: vec![],
         }
     }
 
@@ -265,15 +314,26 @@ mod tests {
     }
 
     #[test]
-    fn unverifiable_is_half_credit() {
+    fn unverifiable_scores_zero() {
         let claims = vec![claim(VERDICT_UNVERIFIABLE, 2), claim(VERDICT_SUPPORTED, 2)];
-        assert_eq!(freshness_score(&claims), Some(75.0));
+        assert_eq!(freshness_score(&claims), Some(50.0));
     }
 
     #[test]
-    fn stable_counts_as_supported() {
-        let claims = vec![claim(VERDICT_STABLE, 3)];
-        assert_eq!(freshness_score(&claims), Some(100.0));
+    fn stable_is_excluded_from_score() {
+        let claims = vec![claim(VERDICT_STABLE, 3), claim(VERDICT_CHANGED, 3)];
+        assert_eq!(freshness_score(&claims), Some(0.0));
+    }
+
+    #[test]
+    fn coverage_counts_adjudicated_only() {
+        let claims = vec![
+            claim(VERDICT_SUPPORTED, 3),
+            claim(VERDICT_STABLE, 1),
+            claim(VERDICT_PENDING, 2),
+        ];
+        assert_eq!(adjudicated_count(&claims), 1);
+        assert_eq!(coverage(&claims), Some(33.0));
     }
 
     #[test]

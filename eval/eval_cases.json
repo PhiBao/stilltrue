@@ -1,0 +1,7 @@
+[
+  {"name": "demo-support-macro", "text": "OpenAI API pricing and platform notes (support macro, 2024):\n\nGPT-4o costs $5 per million input tokens and $15 per million output tokens. GPT-4o mini costs $0.15 per million input tokens and $0.60 per million output tokens. The Batch API offers a 50% discount on both models. GPT-4o was released in May 2024. The Assistants API is the recommended way to build agents on the OpenAI platform. GPT-4 Turbo costs $10 per million input tokens and $30 per million output tokens."},
+  {"name": "ceo-claim-no-digits", "text": "Sarah Chen is the chief executive officer of Northwind. Northwind charges $40 per seat per month for the Pro plan. The Pro plan includes audit logs and SSO. Northwind was founded in 2019."},
+  {"name": "current-stripe-version", "text": "The current Stripe API version is 2024-12-18. Stripe standard card fees are 2.9% plus 30 cents per transaction. Payouts take 2 to 5 business days."},
+  {"name": "notion-ai-pricing", "text": "Notion AI costs $10 per member per month as a standalone add-on. The Business plan includes Notion AI at $20 per member per month. Notion was founded in 2016."},
+  {"name": "instructions-only", "text": "You can click the button to continue. What is the price? Please contact sales for a quote. Learn more about our product."}
+]
