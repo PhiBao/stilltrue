@@ -231,13 +231,13 @@ drill      forced primary outage
 
 ### Demo video
 
-<!-- TODO: add the public video URL before submission. -->
+[`docs/stilltrue-demo.mp4`](docs/stilltrue-demo.mp4) — 88 seconds, narrated over the live app (seeded check, evidence, repair, failover receipt). Recorded with the open-video-demo template; the story lives in that project, not this repo.
 
-The recording script is in [`docs/demo-script.md`](docs/demo-script.md). It covers the problem, the seeded catch, the repaired answer, the receipt, and the failover drill in under three minutes.
+The recording runbook is [`docs/demo-script.md`](docs/demo-script.md): the problem, the seeded catch, the repaired answer, the receipt, and the failover drill.
 
 ### Deployed demo
 
-<!-- TODO: add the deployed URL before submission. -->
+<!-- TODO: add the deployed URL before submission. Live at http://localhost:3100 in development. -->
 
 A single-VM deployment guide with Caddy, TLS, private Bifrost, and SSE-safe proxying is in [`docs/deploy.md`](docs/deploy.md).
 

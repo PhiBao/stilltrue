@@ -78,18 +78,18 @@ StillTrue treats freshness as a property of **claims**, not answers.
 - [x] Use Tavily for fresh research and Bifrost for the model requests that assess claims.
 - [x] Clearly distinguish evidence from inference (evidence cards + validated citations).
 - [x] Working project and reproducible demo.
-- [x] Repository with README, setup, architecture, and tests.
+- [x] Repository with README, setup, architecture, and tests. (Public: https://github.com/PhiBao/stilltrue)
 - [x] Explanation of the problem, technologies, and AI usage.
-- [ ] Demo video URL — add before submission.
-- [ ] Deployed demo URL — add before submission.
+- [x] Demo video: `docs/stilltrue-demo.mp4` (local file — upload or link it).
+- [ ] Deployed demo URL — deploy per `docs/deploy.md`, then add.
 - [ ] Team names — add before submission.
 - [ ] Discord confirmation of problem statement 05 — add before submission.
 
 ## Links
 
-- Repository: <!-- TODO -->
-- Deployed demo: <!-- TODO -->
-- Demo video: <!-- TODO -->
+- Repository: https://github.com/PhiBao/stilltrue
+- Deployed demo: <!-- TODO after deploy -->
+- Demo video: `docs/stilltrue-demo.mp4` (upload or link)
 - Architecture diagram: `docs/architecture.svg`
 - Screenshots: `docs/screenshots/`
 - Demo script: `docs/demo-script.md`
